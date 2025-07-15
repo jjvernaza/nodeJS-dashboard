@@ -7,7 +7,11 @@ const TipoServicio = sequelize.define('TipoServicio', {
         primaryKey: true,
         autoIncrement: true
     },
-    Tipo: DataTypes.STRING
+    Tipo: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true // Garantiza que no haya tipos duplicados
+    }
 }, {
     tableName: 'tipo_servicio',
     timestamps: false
