@@ -275,9 +275,12 @@ exports.deleteClient = async (req, res) => {
     const { id } = req.params;
     try {
         const client = await Cliente.findByPk(id);
-        if (!client) return res.status(404).json({ message: "Cliente no encontrado" });
+        if (!client) {
+            return res.status(404).json({ message: "Cliente no encontrado" });
+        }
+
         await client.destroy();
-        res.json({ message: "Cliente eliminado" });
+        res.json({ message: "Cliente eliminado correctamente" });
     } catch (error) {
         console.error('❌ Error en deleteClient:', error);
         res.status(500).json({ message: "Error al eliminar cliente", error: error.message });
@@ -578,3 +581,5 @@ exports.exportMorososToExcel = async (req, res) => {
       res.status(500).json({ message: 'Error al generar archivo Excel', error: error.message });
     }
   };
+
+  

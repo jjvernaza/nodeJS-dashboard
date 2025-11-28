@@ -23,4 +23,7 @@ router.get('/cliente/:clienteID', paymentController.getPagosCliente);
 // obtener ingresos mensuales
 router.get('/ingresos-mensuales', paymentController.getMonthlyIncome);
 
+// Ruta para generar reporte de clientes con pagos
+router.get('/reporte-clientes-pagos', paymentController.generarReporteClientesPagos);
+
 module.exports = router;
