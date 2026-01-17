@@ -1,17 +1,19 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { Op } = require('sequelize');
+const sequelize = require('../config/db.config');
 const User = require('../models/user.model');
 const Estado = require('../models/estado.model');
 const UsuarioPermiso = require('../models/usuario_permiso.model');
 const Permiso = require('../models/permisos.model');
+const { registrarAuditoria } = require('../utils/auditoria.helper');
 
 // 🔐 Función para hashear contraseñas
 function hashPassword(password) {
     return crypto.createHash('sha256').update(password).digest('hex');
 }
 
-// ✅ Crear nuevo usuario (admin, soporte, etc.)
+// ✅ Crear nuevo usuario
 exports.createUser = async (req, res) => {
     try {
         const { Cedula, Telefono, Nombre, Apellidos, Funcion, User: username, Password, estado_id } = req.body;
@@ -40,6 +42,20 @@ exports.createUser = async (req, res) => {
         
         const hashedPassword = hashPassword(Password);
         
+        // ✅ BUSCAR el ID del estado "activo" (en minúscula)
+        let estadoActivo = estado_id;
+        if (!estadoActivo) {
+            const estadoActivoRecord = await Estado.findOne({ 
+                where: sequelize.where(
+                    sequelize.fn('LOWER', sequelize.col('Estado')),
+                    'activo'
+                )
+            });
+            estadoActivo = estadoActivoRecord ? estadoActivoRecord.ID : 1;
+        }
+        
+        console.log('📝 Creando usuario con estado_id:', estadoActivo);
+        
         const newUser = await User.create({
             Cedula,
             Telefono,
@@ -48,9 +64,15 @@ exports.createUser = async (req, res) => {
             Funcion,
             User: username,
             Password: hashedPassword,
-            estado_id: estado_id || 1, // Por defecto activo
+            estado_id: estadoActivo,
             fecha_creacion: new Date(),
             fecha_modificacion: new Date()
+        });
+        
+        console.log('✅ Usuario creado:', {
+            id: newUser.ID,
+            nombre: newUser.Nombre,
+            estado_id: newUser.estado_id
         });
         
         res.status(201).json({
@@ -68,7 +90,7 @@ exports.createUser = async (req, res) => {
     }
 };
 
-// ✅ Login de usuario
+// ✅ Login de usuario con auditoría completa
 exports.login = async (req, res) => {
     try {
         const { user, password } = req.body;
@@ -83,48 +105,110 @@ exports.login = async (req, res) => {
                 {
                     model: Estado,
                     as: 'estado',
-                    attributes: ['Estado']
+                    attributes: ['ID', 'Estado']
                 }
             ]
         });
         
         if (!userRecord) {
+            // ✅ Registrar intento fallido - usuario no encontrado
+            await registrarAuditoria(
+                null, 
+                'AUTENTICACION', 
+                'LOGIN_FALLIDO', 
+                `Intento de login fallido - Usuario no encontrado: ${user}`, 
+                req
+            );
             return res.status(404).json({ message: 'Usuario no encontrado' });
         }
         
-        // Verificar si el usuario está activo
-        if (userRecord.estado && userRecord.estado.Estado !== 'Activo') {
-            return res.status(403).json({ message: 'Usuario inactivo o suspendido' });
+        // ✅ Verificar si el usuario está activo (case-insensitive)
+        const estadoActual = userRecord.estado?.Estado?.toLowerCase() || '';
+        console.log('👤 Intento de login:', {
+            usuario: userRecord.User,
+            estadoEnBD: userRecord.estado?.Estado,
+            estadoNormalizado: estadoActual
+        });
+        
+        if (estadoActual !== 'activo') {
+            // ✅ Registrar intento con usuario inactivo
+            await registrarAuditoria(
+                userRecord.ID, 
+                'AUTENTICACION', 
+                'LOGIN_BLOQUEADO', 
+                `Intento de login con usuario ${estadoActual}: ${userRecord.Nombre} ${userRecord.Apellidos}`, 
+                req
+            );
+            console.log('❌ Login rechazado - Usuario no activo');
+            return res.status(403).json({ 
+                message: 'Usuario inactivo o suspendido',
+                estadoActual: userRecord.estado?.Estado
+            });
         }
         
         const hashedInput = hashPassword(password);
         
         if (userRecord.Password !== hashedInput) {
+            // ✅ Registrar contraseña incorrecta
+            await registrarAuditoria(
+                userRecord.ID, 
+                'AUTENTICACION', 
+                'LOGIN_FALLIDO', 
+                `Intento de login con contraseña incorrecta: ${userRecord.Nombre} ${userRecord.Apellidos}`, 
+                req
+            );
+            console.log('❌ Login rechazado - Contraseña incorrecta');
             return res.status(401).json({ message: 'Contraseña incorrecta' });
         }
         
-        // Obtener los permisos del usuario
-        const permisos = await UsuarioPermiso.findAll({
-            where: { usuario_id: userRecord.ID },
-            include: [
-                {
-                    model: Permiso,
-                    as: 'permiso',
-                    attributes: ['id', 'nombre']
-                }
-            ]
-        });
+        // ✅ Obtener los permisos del usuario
+        let permisosNombres = [];
         
-        const permisosNombres = permisos.map(p => p.permiso.nombre);
+        try {
+            const permisos = await UsuarioPermiso.findAll({
+                where: { usuario_id: userRecord.ID },
+                include: [
+                    {
+                        model: Permiso,
+                        as: 'permiso',
+                        attributes: ['id', 'nombre'],
+                        required: true
+                    }
+                ]
+            });
+            
+            permisosNombres = permisos
+                .filter(p => p.permiso && p.permiso.nombre)
+                .map(p => p.permiso.nombre);
+            
+            console.log('✅ Login exitoso para:', userRecord.User);
+            console.log('🔐 Total de permisos cargados:', permisosNombres.length);
+            console.log('📋 Permisos:', permisosNombres);
+            
+        } catch (permError) {
+            console.error('⚠️ Error al cargar permisos:', permError.message);
+            console.log('⚠️ Usuario autenticado sin permisos asignados');
+        }
         
+        // ✅ Incluir permisos y función en el token
         const token = jwt.sign(
             { 
                 id: userRecord.ID, 
                 nombre: userRecord.Nombre,
+                funcion: userRecord.Funcion,
                 permisos: permisosNombres
             },
             process.env.JWT_SECRET,
             { expiresIn: '8h' }
+        );
+        
+        // ✅ Registrar login exitoso en bitácora
+        await registrarAuditoria(
+            userRecord.ID, 
+            'AUTENTICACION', 
+            'LOGIN', 
+            `Login exitoso: ${userRecord.Nombre} ${userRecord.Apellidos} (${userRecord.Funcion})`, 
+            req
         );
         
         res.json({
@@ -144,16 +228,39 @@ exports.login = async (req, res) => {
     }
 };
 
+// ✅ Logout de usuario con registro en bitácora
+exports.logout = async (req, res) => {
+    try {
+        const usuario = req.user; // Viene del authMiddleware
+        
+        // ✅ Registrar el logout en bitácora
+        await registrarAuditoria(
+            usuario.id,
+            'AUTENTICACION',
+            'LOGOUT',
+            `Cierre de sesión: ${usuario.nombre} (${usuario.funcion})`,
+            req
+        );
+        
+        console.log(`🚪 Logout exitoso: ${usuario.nombre}`);
+        
+        res.json({ message: 'Sesión cerrada exitosamente' });
+    } catch (error) {
+        console.error('❌ Error al cerrar sesión:', error);
+        res.status(500).json({ message: 'Error al cerrar sesión', error: error.message });
+    }
+};
+
 // Obtener todos los usuarios
 exports.getAllUsers = async (req, res) => {
     try {
         const users = await User.findAll({
-            attributes: ['ID', 'Cedula', 'Nombre', 'Apellidos', 'Telefono', 'Funcion', 'User', 'fecha_creacion', 'fecha_modificacion'],
+            attributes: ['ID', 'Cedula', 'Nombre', 'Apellidos', 'Telefono', 'Funcion', 'User', 'estado_id', 'fecha_creacion', 'fecha_modificacion'],
             include: [
                 {
                     model: Estado,
                     as: 'estado',
-                    attributes: ['Estado']
+                    attributes: ['ID', 'Estado']
                 }
             ]
         });
@@ -316,7 +423,7 @@ exports.deleteUser = async (req, res) => {
         }
         
         // En lugar de eliminar físicamente, opcionalmente puedes desactivar el usuario
-        // await user.update({ estado_id: 2 }); // Asumiendo que 2 es "Inactivo"
+        // await user.update({ estado_id: 4 }); // 4 es "inactivo"
         
         // Si prefieres eliminar físicamente:
         await user.destroy();
@@ -332,6 +439,6 @@ exports.deleteUser = async (req, res) => {
 exports.verifyToken = (req, res) => {
     res.json({ 
         message: "Token válido", 
-        user: req.user // Asumiendo que req.user se establece en tu middleware de autenticación
+        user: req.user
     });
 };

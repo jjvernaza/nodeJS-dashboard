@@ -12,6 +12,15 @@ const clientRoutes = require('./routes/client.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const serviceRoutes = require('./routes/service.routes');
 const estadoRoutes = require('./routes/estado.routes');
+const planRoutes = require('./routes/plan.routes');
+const sectorRoutes = require('./routes/sector.routes');
+const tarifaRoutes = require('./routes/tarifa.routes');
+const permisosRoutes = require('./routes/permisos.routes');
+const usuarioPermisoRoutes = require('./routes/usuario_permiso.routes');
+const metodoPagoRoutes = require('./routes/metodo_pago.routes');
+
+// ✅ NUEVO: Importar rutas de bitácora
+const bitacoraRoutes = require('./routes/bitacora.routes');
 
 // ✅ Inicializar app de Express
 const app = express();
@@ -36,30 +45,51 @@ db.authenticate()
   .then(() => console.log('✅ Tablas sincronizadas'))
   .catch(err => console.error('❌ Error en la conexión a la base de datos:', err));
 
-// ✅ Usar rutas existentes
+// ========================================
+// RUTAS DE LA API
+// ========================================
+
+// ✅ Rutas de autenticación y usuarios
 app.use('/api/users', userRoutes);
+
+// ✅ Rutas de clientes
 app.use('/api/clientes', clientRoutes);
+
+// ✅ Rutas de pagos
 app.use('/api/pagos', paymentRoutes);
+
+// ✅ Rutas de servicios
 app.use('/api/servicios', serviceRoutes);
-app.use('/api/estados', estadoRoutes); // ⚠️ CORREGIDO: Cambiado de '/api' a '/api/estados'
 
-// ✅ Importar nuevas rutas
-const planRoutes = require('./routes/plan.routes');
-const sectorRoutes = require('./routes/sector.routes');
-const tarifaRoutes = require('./routes/tarifa.routes');
-const permisosRoutes = require('./routes/permisos.routes');
-const usuarioPermisoRoutes = require('./routes/usuario_permiso.routes');
-const metodoPagoRoutes = require('./routes/metodo_pago.routes');
+// ✅ Rutas de estados
+app.use('/api/estados', estadoRoutes);
 
-// ✅ Usar nuevas rutas
+// ✅ Rutas de planes
 app.use('/api/planes', planRoutes);
+
+// ✅ Rutas de sectores
 app.use('/api/sectores', sectorRoutes);
+
+// ✅ Rutas de tarifas
 app.use('/api/tarifas', tarifaRoutes);
+
+// ✅ Rutas de permisos
 app.use('/api/permisos', permisosRoutes);
+
+// ✅ Rutas de usuario-permisos
 app.use('/api/usuario-permisos', usuarioPermisoRoutes);
+
+// ✅ Rutas de métodos de pago
 app.use('/api/metodos-pago', metodoPagoRoutes);
 
-// ✅ Ruta protegida de prueba con middleware JWT (opcional)
+// ✅ NUEVO: Rutas de bitácora
+app.use('/api/bitacora', bitacoraRoutes);
+
+// ========================================
+// RUTAS DE PRUEBA Y STATUS
+// ========================================
+
+// ✅ Ruta protegida de prueba con middleware JWT
 const authMiddleware = require('./middlewares/auth.middleware');
 app.get('/api/secure', authMiddleware, (req, res) => {
   res.json({ message: `Hola usuario autenticado, tu ID es ${req.user.id}` });
@@ -68,15 +98,24 @@ app.get('/api/secure', authMiddleware, (req, res) => {
 // ✅ Ruta para comprobar estado del servidor
 app.get('/api/status', (req, res) => {
   res.json({
-     status: 'online',
+    status: 'online',
     message: 'Servidor funcionando correctamente',
-    timestamp: new Date()
+    timestamp: new Date(),
+    version: '2.0.0'
   });
 });
 
+// ========================================
+// MIDDLEWARE DE MANEJO DE ERRORES
+// ========================================
+
 // ✅ Middleware para manejar errores 404
 app.use((req, res, next) => {
-  res.status(404).json({ message: 'Ruta no encontrada' });
+  res.status(404).json({ 
+    message: 'Ruta no encontrada',
+    path: req.originalUrl,
+    method: req.method
+  });
 });
 
 // ✅ Middleware para manejar errores generales
@@ -88,8 +127,14 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ✅ Levantar servidor
+// ========================================
+// LEVANTAR SERVIDOR
+// ========================================
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
+  console.log(`📡 API disponible en: http://localhost:${PORT}/api`);
+  console.log(`📊 Bitácora disponible en: http://localhost:${PORT}/api/bitacora`);
+  console.log(`🔒 Modo: ${process.env.NODE_ENV || 'development'}`);
 });

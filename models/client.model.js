@@ -15,7 +15,7 @@ const Cliente = sequelize.define('Cliente', {
         autoIncrement: true,     
     },     
     NombreCliente: DataTypes.STRING,
-    ApellidoCliente: DataTypes.STRING, // Nuevo campo según tu diagrama
+    ApellidoCliente: DataTypes.STRING,
     plan_mb_id: {  // Nueva relación
         type: DataTypes.INTEGER,
         references: {

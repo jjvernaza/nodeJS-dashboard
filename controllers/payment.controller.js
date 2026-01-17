@@ -2,16 +2,30 @@ const Pago = require('../models/payment.model');
 const Cliente = require('../models/client.model'); 
 const MetodoDePago = require('../models/metodo_pago.model');
 const Tarifa = require('../models/tarifa.model');
-const moment = require('moment');    
+const PlanMB = require('../models/plan_mb.model');
+const Sector = require('../models/sector.model');
+const Estado = require('../models/estado.model');
+const moment = require('moment');
+const XLSX = require('xlsx');
 
-// Añadir pago
+// ✅ Añadir pago con registro histórico de plan y tarifa
 exports.addPayment = async (req, res) => {     
     try {         
         let { ClienteID, FechaPago, Mes, Ano, Monto, Metodo_de_PagoID } = req.body;          
         
-        // Verificar que el cliente existe
+        // Verificar que el cliente existe e incluir plan y tarifa
         const cliente = await Cliente.findByPk(ClienteID, {
-            include: [{ model: Tarifa, as: 'tarifa' }]
+            include: [
+                { 
+                    model: Tarifa, 
+                    as: 'tarifa' 
+                },
+                { 
+                    model: PlanMB, 
+                    as: 'plan',
+                    attributes: ['id', 'nombre', 'velocidad']
+                }
+            ]
         });
         
         if (!cliente) {
@@ -36,13 +50,26 @@ exports.addPayment = async (req, res) => {
         // ✅ Convertir la fecha al formato 'YYYY-MM-DD' antes de guardarla         
         FechaPago = moment(FechaPago, ['YYYY-MM-DD', 'YYYY/MM/DD', 'DD-MM-YYYY', 'DD/MM/YYYY']).format('YYYY-MM-DD');          
         
+        // ✅ Capturar plan y tarifa actual del cliente para registro histórico
+        const datosHistoricos = {
+            plan_mb_id: cliente.plan_mb_id || null,
+            tarifa_id: cliente.tarifa_id || null,
+            velocidad_contratada: cliente.plan?.velocidad || null
+        };
+        
+        console.log('📊 Guardando pago con datos históricos:', datosHistoricos);
+        
         const newPayment = await Pago.create({             
             ClienteID,             
             FechaPago,             
             Mes,             
             Ano,             
             Monto,             
-            Metodo_de_PagoID         
+            Metodo_de_PagoID,
+            // ✅ Agregar campos históricos
+            plan_mb_id: datosHistoricos.plan_mb_id,
+            tarifa_id: datosHistoricos.tarifa_id,
+            velocidad_contratada: datosHistoricos.velocidad_contratada
         });          
         
         res.status(201).json({
@@ -55,7 +82,7 @@ exports.addPayment = async (req, res) => {
     } 
 };   
 
-// Nueva función para obtener los métodos de pago 
+// Obtener los métodos de pago 
 exports.getMetodosPago = async (req, res) => {     
     try {         
         const metodos = await MetodoDePago.findAll();                  
@@ -71,7 +98,7 @@ exports.getMetodosPago = async (req, res) => {
     } 
 };     
 
-// ✅ Obtener pagos de un cliente 
+// ✅ Obtener pagos de un cliente con información histórica (CORREGIDO)
 exports.getPagosCliente = async (req, res) => {     
     try {         
         const { clienteID } = req.params;         
@@ -81,12 +108,24 @@ exports.getPagosCliente = async (req, res) => {
         
         const pagos = await Pago.findAll({             
             where: { ClienteID: clienteID },             
-            include: [{                 
-                model: MetodoDePago,                 
-                as: 'metodoPago',                   
-                attributes: ['ID', 'Metodo']             
-            }],
-            order: [['FechaPago', 'DESC'], ['ID', 'DESC']] // Ordenar por fecha más reciente primero
+            include: [
+                {                 
+                    model: MetodoDePago,                 
+                    as: 'metodoPago',                   
+                    attributes: ['ID', 'Metodo']             
+                },
+                {
+                    model: PlanMB,
+                    as: 'planHistorico',
+                    attributes: ['id', 'nombre', 'velocidad']
+                },
+                {
+                    model: Tarifa,
+                    as: 'tarifaHistorica',
+                    attributes: ['id', 'valor']
+                }
+            ],
+            order: [['FechaPago', 'DESC'], ['ID', 'DESC']]
         });          
         
         if (!pagos || pagos.length === 0) {             
@@ -100,7 +139,7 @@ exports.getPagosCliente = async (req, res) => {
     } 
 };
 
-// Obtener todos los pagos con información del cliente y método de pago
+// ✅ Obtener todos los pagos con información histórica (CORREGIDO)
 exports.getAllPagos = async (req, res) => {
     try {
         const pagos = await Pago.findAll({
@@ -108,15 +147,25 @@ exports.getAllPagos = async (req, res) => {
                 {
                     model: Cliente,
                     as: 'cliente',
-                    attributes: ['ID', 'NombreCliente', 'ApellidoCliente']
+                    attributes: ['ID', 'NombreCliente', 'ApellidoCliente', 'Cedula']  // ✅ CORREGIDO
                 },
                 {
                     model: MetodoDePago,
                     as: 'metodoPago',
                     attributes: ['ID', 'Metodo']
+                },
+                {
+                    model: PlanMB,
+                    as: 'planHistorico',
+                    attributes: ['id', 'nombre', 'velocidad']
+                },
+                {
+                    model: Tarifa,
+                    as: 'tarifaHistorica',
+                    attributes: ['id', 'valor']
                 }
             ],
-            order: [['FechaPago', 'DESC'], ['ID', 'DESC']] // Ordenar por fecha más reciente primero
+            order: [['FechaPago', 'DESC'], ['ID', 'DESC']]
         });
         
         res.json(pagos);
@@ -149,6 +198,9 @@ exports.updatePayment = async (req, res) => {
                 return res.status(404).json({ message: "Método de pago no encontrado" });
             }
         }
+        
+        // ⚠️ NOTA: No actualizamos plan_mb_id, tarifa_id ni velocidad_contratada
+        // porque son datos históricos que deben permanecer como estaban al momento del pago original
         
         await pago.update({
             FechaPago: FechaPago || pago.FechaPago,
@@ -187,8 +239,7 @@ exports.deletePayment = async (req, res) => {
     }
 };
 
-// ✅ CORREGIDO: Obtener ingresos mensuales por año con orden cronológico correcto
-// ADAPTADO PARA MESES EN ESPAÑOL
+// ✅ Obtener ingresos mensuales por año con orden cronológico correcto
 exports.getMonthlyIncome = async (req, res) => {
     try {
         const year = req.query.anio || new Date().getFullYear();
@@ -201,12 +252,6 @@ exports.getMonthlyIncome = async (req, res) => {
             'ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO',
             'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'
         ];
-        
-        // Crear un mapa para el orden de los meses
-        const ordenMeses = {};
-        mesesOrdenados.forEach((mes, index) => {
-            ordenMeses[mes] = index;
-        });
         
         // Query para obtener ingresos mensuales del año seleccionado
         const pagos = await Pago.findAll({
@@ -223,7 +268,6 @@ exports.getMonthlyIncome = async (req, res) => {
         });
         
         console.log(`✅ Pagos encontrados: ${pagos.length} meses con datos`);
-        console.log(`📋 Datos de pagos:`, pagos);
         
         // Crear estructura completa con todos los meses
         const resultadoCompleto = mesesOrdenados.map(mes => {
@@ -249,7 +293,7 @@ exports.getMonthlyIncome = async (req, res) => {
     }
 };
 
-// Generar reporte de clientes con pagos anuales en Excel
+// ✅ Generar reporte de clientes con pagos anuales en Excel (CORREGIDO)
 exports.generarReporteClientesPagos = async (req, res) => {
     try {
         const { ano } = req.query;
@@ -257,20 +301,13 @@ exports.generarReporteClientesPagos = async (req, res) => {
         
         console.log(`📊 Generando reporte de pagos para el año ${anioSeleccionado}`);
         
-        const Cliente = require('../models/client.model');
-        const Plan = require('../models/plan_mb.model');
-        const Tarifa = require('../models/tarifa.model');
-        const Sector = require('../models/sector.model');
-        const Estado = require('../models/estado.model');
-        const XLSX = require('xlsx');
-        
         // Obtener todos los clientes con sus relaciones
         const clientes = await Cliente.findAll({
             include: [
                 {
-                    model: Plan,
+                    model: PlanMB,
                     as: 'plan',
-                    attributes: ['id', 'nombre']
+                    attributes: ['id', 'nombre', 'velocidad']
                 },
                 {
                     model: Tarifa,
@@ -288,17 +325,29 @@ exports.generarReporteClientesPagos = async (req, res) => {
                     attributes: ['ID', 'Estado']
                 }
             ],
-            order: [['NombreCliente', 'ASC']]
+            order: [['NombreCliente', 'ASC'], ['ApellidoCliente', 'ASC']]  // ✅ CORREGIDO
         });
         
         console.log(`👥 Clientes encontrados: ${clientes.length}`);
         
-        // Obtener todos los pagos del año seleccionado
+        // Obtener pagos con información histórica
         const pagos = await Pago.findAll({
             where: {
                 Ano: anioSeleccionado
             },
-            attributes: ['ClienteID', 'Mes', 'Monto']
+            include: [
+                {
+                    model: PlanMB,
+                    as: 'planHistorico',
+                    attributes: ['nombre', 'velocidad']
+                },
+                {
+                    model: Tarifa,
+                    as: 'tarifaHistorica',
+                    attributes: ['valor']
+                }
+            ],
+            attributes: ['ClienteID', 'Mes', 'Monto', 'velocidad_contratada']
         });
         
         console.log(`💰 Pagos encontrados: ${pagos.length}`);
@@ -315,12 +364,13 @@ exports.generarReporteClientesPagos = async (req, res) => {
         // Encabezados
         const encabezados = [
             'Nombre',
-            'Apellido',
+            'Apellido',  // ✅ CORREGIDO
             'CC',
             'Plan MB',
             'Tarifa',
             'Teléfono',
             'Ubicación',
+            'Sector',
             'Estado',
             ...meses
         ];
@@ -330,17 +380,18 @@ exports.generarReporteClientesPagos = async (req, res) => {
         // Procesar cada cliente
         for (const cliente of clientes) {
             const fila = [
-                cliente.NombreCliente || '',
-                cliente.ApellidoCliente || '',
+                cliente.NombreCliente || '',  // ✅ CORREGIDO
+                cliente.ApellidoCliente || '',  // ✅ CORREGIDO
                 cliente.Cedula || '',
                 cliente.plan?.nombre || 'Sin plan',
                 cliente.tarifa ? `$${parseFloat(cliente.tarifa.valor).toLocaleString('es-CO')}` : 'Sin tarifa',
                 cliente.Telefono || '',
                 cliente.Ubicacion || '',
+                cliente.sector?.nombre || 'Sin sector',  // ✅ AGREGADO
                 cliente.estado?.Estado || 'Sin estado'
             ];
             
-            // Agregar pagos por mes
+            // Agregar pagos por mes con información histórica
             for (const mes of meses) {
                 const pagoMes = pagos.find(p => 
                     p.ClienteID === cliente.ID && 
@@ -348,7 +399,15 @@ exports.generarReporteClientesPagos = async (req, res) => {
                 );
                 
                 if (pagoMes) {
-                    fila.push(`$${parseFloat(pagoMes.Monto).toLocaleString('es-CO')}`);
+                    // Mostrar monto con información del plan histórico si está disponible
+                    let textoPago = `$${parseFloat(pagoMes.Monto).toLocaleString('es-CO')}`;
+                    if (pagoMes.planHistorico?.nombre) {
+                        textoPago += ` (${pagoMes.planHistorico.nombre})`;
+                    }
+                    if (pagoMes.velocidad_contratada) {
+                        textoPago += ` ${pagoMes.velocidad_contratada}`;
+                    }
+                    fila.push(textoPago);
                 } else {
                     fila.push('No ha pagado aún');
                 }
@@ -366,15 +425,28 @@ exports.generarReporteClientesPagos = async (req, res) => {
             { wch: 20 }, // Nombre
             { wch: 20 }, // Apellido
             { wch: 15 }, // CC
-            { wch: 15 }, // Plan MB
+            { wch: 18 }, // Plan MB
             { wch: 12 }, // Tarifa
             { wch: 15 }, // Teléfono
             { wch: 30 }, // Ubicación
+            { wch: 15 }, // Sector
             { wch: 12 }, // Estado
-            ...meses.map(() => ({ wch: 15 })) // Meses
+            ...meses.map(() => ({ wch: 20 })) // Meses (más ancho para info adicional)
         ];
         
         worksheet['!cols'] = columnWidths;
+        
+        // Estilo para encabezados (opcional pero recomendado)
+        const range = XLSX.utils.decode_range(worksheet['!ref']);
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+            const address = XLSX.utils.encode_col(C) + "1";
+            if (!worksheet[address]) continue;
+            worksheet[address].s = {
+                font: { bold: true },
+                fill: { fgColor: { rgb: "4472C4" } },
+                alignment: { horizontal: "center" }
+            };
+        }
         
         // Agregar hoja al libro
         XLSX.utils.book_append_sheet(workbook, worksheet, `Pagos ${anioSeleccionado}`);
@@ -383,10 +455,14 @@ exports.generarReporteClientesPagos = async (req, res) => {
         const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
         
         // Configurar headers para descarga
-        res.setHeader('Content-Disposition', `attachment; filename=reporte_clientes_pagos_${anioSeleccionado}.xlsx`);
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        const fechaActual = new Date().toISOString().split('T')[0];
+        const nombreArchivo = `reporte_clientes_pagos_${anioSeleccionado}_${fechaActual}.xlsx`;
         
-        console.log('✅ Reporte generado exitosamente');
+        res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Length', buffer.length);
+        
+        console.log(`✅ Reporte generado exitosamente: ${nombreArchivo}`);
         res.send(buffer);
         
     } catch (error) {

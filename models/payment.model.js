@@ -2,6 +2,8 @@ const { DataTypes } = require('sequelize');
 const sequelize = require('../config/db.config'); 
 const MetodoDePago = require('./metodo_pago.model');
 const Cliente = require('./client.model');
+const PlanMB = require('./plan_mb.model');
+const Tarifa = require('./tarifa.model');
 
 const Pago = sequelize.define('Pago', {     
     ID: {         
@@ -32,7 +34,31 @@ const Pago = sequelize.define('Pago', {
     Monto: {         
         type: DataTypes.DECIMAL(10,2),         
         allowNull: false     
-    },     
+    },
+    // ✅ NUEVOS CAMPOS AGREGADOS
+    plan_mb_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: PlanMB,
+            key: 'id'
+        },
+        comment: 'Plan contratado al momento del pago'
+    },
+    tarifa_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: Tarifa,
+            key: 'id'
+        },
+        comment: 'Tarifa aplicada al momento del pago'
+    },
+    velocidad_contratada: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+        comment: 'Velocidad del plan al momento del pago'
+    },
     Metodo_de_PagoID: {         
         type: DataTypes.INTEGER,         
         allowNull: false,         
@@ -49,5 +75,7 @@ const Pago = sequelize.define('Pago', {
 // ✅ Relaciones
 Pago.belongsTo(MetodoDePago, { foreignKey: 'Metodo_de_PagoID', as: 'metodoPago' });
 Pago.belongsTo(Cliente, { foreignKey: 'ClienteID', as: 'cliente' });
+Pago.belongsTo(PlanMB, { foreignKey: 'plan_mb_id', as: 'planHistorico' });
+Pago.belongsTo(Tarifa, { foreignKey: 'tarifa_id', as: 'tarifaHistorica' });
 
 module.exports = Pago;

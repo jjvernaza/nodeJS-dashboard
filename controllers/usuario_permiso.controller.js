@@ -82,7 +82,7 @@ exports.getUsuariosByPermiso = async (req, res) => {
     }
 };
 
-// Asignar permiso a usuario
+// ✅ MEJORADO: Asignar permiso a usuario
 exports.assignPermiso = async (req, res) => {
     const { usuario_id, permiso_id } = req.body;
     try {
@@ -90,9 +90,13 @@ exports.assignPermiso = async (req, res) => {
             return res.status(400).json({ message: 'usuario_id y permiso_id son obligatorios' });
         }
         
+        // Convertir a números para asegurar tipo correcto
+        const usuarioIdNum = parseInt(usuario_id, 10);
+        const permisoIdNum = parseInt(permiso_id, 10);
+        
         // Verificar si el usuario y el permiso existen
-        const usuario = await Usuario.findByPk(usuario_id);
-        const permiso = await Permiso.findByPk(permiso_id);
+        const usuario = await Usuario.findByPk(usuarioIdNum);
+        const permiso = await Permiso.findByPk(permisoIdNum);
         
         if (!usuario) {
             return res.status(404).json({ message: 'Usuario no encontrado' });
@@ -105,8 +109,8 @@ exports.assignPermiso = async (req, res) => {
         // Verificar si ya existe la asignación
         const existingAssignment = await UsuarioPermiso.findOne({
             where: {
-                usuario_id,
-                permiso_id
+                usuario_id: usuarioIdNum,
+                permiso_id: permisoIdNum
             }
         });
         
@@ -116,8 +120,8 @@ exports.assignPermiso = async (req, res) => {
         
         // Crear la asignación
         const nuevaAsignacion = await UsuarioPermiso.create({
-            usuario_id,
-            permiso_id,
+            usuario_id: usuarioIdNum,
+            permiso_id: permisoIdNum,
             fecha_asignacion: new Date()
         });
         
@@ -131,7 +135,7 @@ exports.assignPermiso = async (req, res) => {
     }
 };
 
-// Revocar permiso de usuario
+// Revocar permiso de usuario (por ID de asignación)
 exports.revokePermiso = async (req, res) => {
     const { id } = req.params;
     try {
@@ -154,8 +158,8 @@ exports.revokePermisoUsuario = async (req, res) => {
     try {
         const asignacion = await UsuarioPermiso.findOne({
             where: {
-                usuario_id,
-                permiso_id
+                usuario_id: parseInt(usuario_id, 10),
+                permiso_id: parseInt(permiso_id, 10)
             }
         });
         

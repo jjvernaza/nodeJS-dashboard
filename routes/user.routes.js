@@ -1,33 +1,130 @@
 const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/user.controller');
-const authMiddleware = require('../middlewares/auth.middleware'); // Asumiendo que tienes este middleware
+const authMiddleware = require('../middlewares/auth.middleware');
+const { checkPermission } = require('../middlewares/permission.middleware');
+const { auditMiddleware } = require('../middlewares/auditoria.middleware');
 
-// Rutas públicas
+// ============================================
+// RUTAS PÚBLICAS (Sin autenticación)
+// ============================================
+
+/**
+ * POST /api/users/login
+ * Iniciar sesión
+ * Registra el login en la bitácora automáticamente (dentro del controller)
+ */
 router.post('/login', userController.login);
 
-// Rutas protegidas que requieren autenticación
-router.use(authMiddleware); // Protege todas las rutas siguientes
+// ============================================
+// MIDDLEWARE DE AUTENTICACIÓN
+// ============================================
+// ⚠️ Todas las rutas debajo de esta línea requieren autenticación
+router.use(authMiddleware);
 
-// Verificar token
+// ============================================
+// RUTAS PROTEGIDAS CON AUTENTICACIÓN
+// ============================================
+
+/**
+ * GET /api/users/verify-token
+ * Verificar si el token JWT es válido
+ * Usado para validar sesión en el frontend
+ */
 router.get('/verify-token', userController.verifyToken);
 
-// Obtener todos los usuarios
-router.get('/all', userController.getAllUsers);
+/**
+ * POST /api/users/logout
+ * Cerrar sesión del usuario
+ * Registra el logout en la bitácora
+ */
+router.post('/logout', userController.logout);
 
-// Obtener un usuario por ID
-router.get('/:id', userController.getUserById);
+// ============================================
+// CRUD DE USUARIOS
+// ============================================
 
-// Crear nuevo usuario
-router.post('/create', userController.createUser);
+/**
+ * GET /api/users/all
+ * Obtener todos los usuarios del sistema
+ * Requiere permiso: usuarios.leer
+ */
+router.get('/all', 
+    checkPermission(['usuarios.leer']), 
+    userController.getAllUsers
+);
 
-// Actualizar usuario
-router.put('/update/:id', userController.updateUser);
+/**
+ * GET /api/users/:id
+ * Obtener un usuario específico por ID
+ * Requiere permiso: usuarios.leer
+ */
+router.get('/:id', 
+    checkPermission(['usuarios.leer']), 
+    userController.getUserById
+);
 
-// Cambiar contraseña
-router.put('/change-password/:id', userController.changePassword);
+/**
+ * POST /api/users/create
+ * Crear un nuevo usuario
+ * Requiere permiso: usuarios.crear
+ * Registra la acción en bitácora
+ */
+router.post('/create', 
+    checkPermission(['usuarios.crear']),
+    auditMiddleware('USUARIOS', (req, data) => {
+        const nombre = req.body.Nombre || 'Desconocido';
+        const apellidos = req.body.Apellidos || '';
+        const user = req.body.User || '';
+        return `Usuario creado: ${nombre} ${apellidos} (${user})`;
+    }),
+    userController.createUser
+);
 
-// Eliminar usuario
-router.delete('/delete/:id', userController.deleteUser);
+/**
+ * PUT /api/users/update/:id
+ * Actualizar información de un usuario existente
+ * Requiere permiso: usuarios.actualizar
+ * Registra la acción en bitácora
+ */
+router.put('/update/:id', 
+    checkPermission(['usuarios.actualizar']),
+    auditMiddleware('USUARIOS', (req, data) => {
+        const userId = req.params.id;
+        const nombre = req.body.Nombre || '';
+        const apellidos = req.body.Apellidos || '';
+        return `Usuario actualizado ID: ${userId} - ${nombre} ${apellidos}`.trim();
+    }),
+    userController.updateUser
+);
+
+/**
+ * PUT /api/users/change-password/:id
+ * Cambiar contraseña de un usuario
+ * Cualquier usuario autenticado puede cambiar su propia contraseña
+ * Registra la acción en bitácora
+ */
+router.put('/change-password/:id', 
+    auditMiddleware('USUARIOS', (req, data) => {
+        const userId = req.params.id;
+        return `Contraseña cambiada para usuario ID: ${userId}`;
+    }),
+    userController.changePassword
+);
+
+/**
+ * DELETE /api/users/delete/:id
+ * Eliminar un usuario del sistema
+ * Requiere permiso: usuarios.eliminar
+ * Registra la acción en bitácora
+ */
+router.delete('/delete/:id', 
+    checkPermission(['usuarios.eliminar']),
+    auditMiddleware('USUARIOS', (req, data) => {
+        const userId = req.params.id;
+        return `Usuario eliminado ID: ${userId}`;
+    }),
+    userController.deleteUser
+);
 
 module.exports = router;

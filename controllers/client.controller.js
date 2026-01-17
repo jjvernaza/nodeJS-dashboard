@@ -3,12 +3,12 @@ const Cliente = require('../models/client.model');
 const Pago = require('../models/payment.model');
 const TipoServicio = require('../models/service_type.model');
 const Estado = require('../models/estado.model');
-// Nuevos modelos
 const Plan = require('../models/plan_mb.model');
 const Sector = require('../models/sector.model');
 const Tarifa = require('../models/tarifa.model');
+const XLSX = require('xlsx');
 
-//morosos 
+// Mapa de meses para cálculos de morosidad
 const mesesMap = {
   'ENERO': 1, 'FEBRERO': 2, 'MARZO': 3, 'ABRIL': 4, 'MAYO': 5, 'JUNIO': 6,
   'JULIO': 7, 'AGOSTO': 8, 'SEPTIEMBRE': 9, 'OCTUBRE': 10, 'NOVIEMBRE': 11, 'DICIEMBRE': 12
@@ -28,6 +28,7 @@ function obtenerMesesVencidosDesde(fechaInicio, hoy, diaCorte) {
   return meses;
 }
 
+// ✅ Obtener clientes morosos (CORREGIDO con Nombre y Apellido)
 exports.obtenerMorosos = async (req, res) => {
   try {
     const mesesMin = parseInt(req.query.meses || 3);
@@ -37,6 +38,14 @@ exports.obtenerMorosos = async (req, res) => {
         {
           model: Tarifa,
           as: 'tarifa'
+        },
+        {
+          model: TipoServicio,
+          as: 'tipoServicio'
+        },
+        {
+          model: Sector,
+          as: 'sector'
         }
       ]
     });
@@ -80,17 +89,19 @@ exports.obtenerMorosos = async (req, res) => {
       const mesesDeuda = mesesTotales.filter(([y, m]) => !mesesPagados.has([y, m].toString()));
 
       if (mesesDeuda.length >= mesesMin) {
-        const tipoServicio = await TipoServicio.findOne({ where: { ID: cliente.TipoServicioID } });
         resultados.push({
           ID: cliente.ID,
-          Nombre: cliente.NombreCliente,
-          Apellido: cliente.ApellidoCliente,
-          Telefono: cliente.Telefono,
-          Ubicacion: cliente.Ubicacion,
+          Nombre: cliente.NombreCliente || '',  // ✅ CORREGIDO
+          Apellido: cliente.ApellidoCliente || '',  // ✅ CORREGIDO
+          NombreCompleto: `${cliente.NombreCliente || ''} ${cliente.ApellidoCliente || ''}`.trim(),
+          Telefono: cliente.Telefono || '',
+          Ubicacion: cliente.Ubicacion || '',
+          Sector: cliente.sector?.nombre || 'Sin sector',
           FechaInstalacion: cliente.FechaInstalacion,
           MesesDeuda: mesesDeuda.length,
           MontoDeuda: mesesDeuda.length * cliente.tarifa.valor,
-          TipoServicio: tipoServicio?.Tipo || 'N/A'
+          TipoServicio: cliente.tipoServicio?.Tipo || 'N/A',
+          Cedula: cliente.Cedula || ''
         });
       }
     }
@@ -98,21 +109,21 @@ exports.obtenerMorosos = async (req, res) => {
     res.json(resultados);
   } catch (error) {
     console.error("❌ Error al obtener morosos:", error);
-    res.status(500).json({ error: "Error al obtener morosos" });
+    res.status(500).json({ error: "Error al obtener morosos", message: error.message });
   }
 };
 
-// ✅ Controlador para agregar cliente
+// ✅ Agregar cliente
 exports.addCliente = async (req, res) => {
     try {
         const { 
             NombreCliente, 
-            ApellidoCliente, // Nuevo campo
-            plan_mb_id, // Reemplaza PlanMB
+            ApellidoCliente,
+            plan_mb_id,
             FechaInstalacion, 
             EstadoID, 
-            tarifa_id, // Reemplaza Tarifa
-            sector_id, // Nuevo campo
+            tarifa_id,
+            sector_id,
             IPAddress, 
             Telefono, 
             Ubicacion, 
@@ -124,7 +135,7 @@ exports.addCliente = async (req, res) => {
             return res.status(400).json({ message: 'Todos los campos son obligatorios' });
         }
 
-        // ✅ Verificamos que todas las relaciones existan
+        // ✅ Verificar que todas las relaciones existan
         const estadoExiste = await Estado.findByPk(EstadoID);
         const tipoServicioExiste = await TipoServicio.findByPk(TipoServicioID);
         const planExiste = await Plan.findByPk(plan_mb_id);
@@ -147,7 +158,6 @@ exports.addCliente = async (req, res) => {
             return res.status(400).json({ message: 'El tarifa_id proporcionado no existe.' });
         }
 
-        // ✅ Usar Sequelize en vez de db.query()
         const nuevoCliente = await Cliente.create({
             NombreCliente,
             ApellidoCliente,
@@ -166,26 +176,39 @@ exports.addCliente = async (req, res) => {
         res.status(201).json({ message: 'Cliente agregado correctamente', id: nuevoCliente.ID });
     } catch (error) {
         console.error('❌ Error al agregar cliente:', error);
-        res.status(500).json({ message: 'Error interno del servidor', error });
+        res.status(500).json({ message: 'Error interno del servidor', error: error.message });
     }
 };
 
-// ✅ Buscar cliente por nombre
+// ✅ Buscar cliente por nombre o apellido (CORREGIDO)
 exports.searchClient = async (req, res) => {
     const { nombre } = req.query;
     try {
-        const client = await Cliente.findOne({ 
+        if (!nombre || nombre.trim() === '') {
+            return res.status(400).json({ message: 'Debes proporcionar un nombre para buscar' });
+        }
+
+        const clientes = await Cliente.findAll({ 
             where: { 
                 [Op.or]: [
                     { NombreCliente: { [Op.like]: `%${nombre}%` } },
-                    { ApellidoCliente: { [Op.like]: `%${nombre}%` } }
+                    { ApellidoCliente: { [Op.like]: `%${nombre}%` } },
+                    { Cedula: { [Op.like]: `%${nombre}%` } },
+                    sequelize.where(
+                        sequelize.fn('CONCAT', 
+                            sequelize.col('NombreCliente'), 
+                            ' ', 
+                            sequelize.col('ApellidoCliente')
+                        ),
+                        { [Op.like]: `%${nombre}%` }
+                    )
                 ]
             },
             include: [
                 {
                     model: Estado,
                     as: 'estado',
-                    attributes: ['ID', 'Estado']
+                    attributes: ['ID', 'Estado', 'Color']
                 },
                 {
                     model: TipoServicio,
@@ -207,17 +230,22 @@ exports.searchClient = async (req, res) => {
                     as: 'tarifa',
                     attributes: ['id', 'valor']
                 }
-            ]
+            ],
+            limit: 50  // Limitar resultados para mejor rendimiento
         });
-        if (!client) return res.status(404).json({ message: "Cliente no encontrado" });
-        res.json(client);
+
+        if (!clientes || clientes.length === 0) {
+            return res.status(404).json({ message: "No se encontraron clientes con ese criterio" });
+        }
+
+        res.json(clientes);
     } catch (error) {
         console.error('❌ Error en searchClient:', error);
         res.status(500).json({ message: "Error al buscar cliente", error: error.message });
     }
 };
 
-// ✅ Editar cliente
+// ✅ Actualizar cliente
 exports.updateClient = async (req, res) => {
     const { id } = req.params;
     try {
@@ -263,7 +291,19 @@ exports.updateClient = async (req, res) => {
         }
         
         await client.update(req.body);
-        res.json(client);
+        
+        // Recargar el cliente con todas las relaciones
+        const clienteActualizado = await Cliente.findByPk(id, {
+            include: [
+                { model: Estado, as: 'estado' },
+                { model: TipoServicio, as: 'tipoServicio' },
+                { model: Plan, as: 'plan' },
+                { model: Sector, as: 'sector' },
+                { model: Tarifa, as: 'tarifa' }
+            ]
+        });
+        
+        res.json(clienteActualizado);
     } catch (error) {
         console.error('❌ Error en updateClient:', error);
         res.status(500).json({ message: "Error al actualizar cliente", error: error.message });
@@ -287,7 +327,7 @@ exports.deleteClient = async (req, res) => {
     }
 };
 
-// ✅ ESTE ES EL MÁS IMPORTANTE - Obtener todos los clientes con TODAS las relaciones
+// ✅ Obtener todos los clientes con TODAS las relaciones
 exports.getAllClients = async (req, res) => {
     try {
         console.log('🔍 Obteniendo todos los clientes con relaciones...');
@@ -312,7 +352,7 @@ exports.getAllClients = async (req, res) => {
                 {
                     model: Estado,
                     as: 'estado',
-                    attributes: ['ID', 'Estado', 'Color'], // ✅ Incluir Color
+                    attributes: ['ID', 'Estado', 'Color'],
                     required: false
                 },
                 {
@@ -345,25 +385,6 @@ exports.getAllClients = async (req, res) => {
 
         console.log(`✅ Se encontraron ${clientes.length} clientes`);
         
-        // ⚠️ DEBUGGING CRÍTICO - Verificar las relaciones
-        if (clientes.length > 0) {
-            const cliente = clientes[0];
-            console.log('📋 PRIMER CLIENTE COMPLETO:', JSON.stringify({
-                ID: cliente.ID,
-                NombreCliente: cliente.NombreCliente,
-                plan_mb_id: cliente.plan_mb_id,
-                plan: cliente.plan,
-                tarifa_id: cliente.tarifa_id, 
-                tarifa: cliente.tarifa,
-                TipoServicioID: cliente.TipoServicioID,
-                tipoServicio: cliente.tipoServicio,
-                EstadoID: cliente.EstadoID,
-                estado: cliente.estado,
-                sector_id: cliente.sector_id,
-                sector: cliente.sector
-            }, null, 2));
-        }
-
         res.json(clientes);
     } catch (error) {
         console.error("❌ Error en getAllClients:", error);
@@ -375,10 +396,7 @@ exports.getAllClients = async (req, res) => {
     }
 };
 
-// Agregar esta línea al inicio del archivo client.controller.js
-const XLSX = require('xlsx');
-
-// Agregar este método al final de client.controller.js
+// ✅ Exportar clientes a Excel (CORREGIDO)
 exports.exportClientsToExcel = async (req, res) => {
     try {
         console.log('📊 Generando archivo Excel de clientes...');
@@ -437,8 +455,10 @@ exports.exportClientsToExcel = async (req, res) => {
         // Formatear datos para Excel
         const excelData = clientes.map(cliente => ({
             'ID': cliente.ID,
-            'Nombre': cliente.NombreCliente || '',
-            'Apellido': cliente.ApellidoCliente || '',
+            'Nombre': cliente.NombreCliente || '',  // ✅ CORREGIDO
+            'Apellido': cliente.ApellidoCliente || '',  // ✅ CORREGIDO
+            'Nombre Completo': `${cliente.NombreCliente || ''} ${cliente.ApellidoCliente || ''}`.trim(),
+            'Cédula': cliente.Cedula || '',
             'Plan MB': cliente.plan ? `${cliente.plan.nombre} (${cliente.plan.velocidad})` : 'Sin plan',
             'Fecha Instalación': cliente.FechaInstalacion ? 
                 new Date(cliente.FechaInstalacion).toLocaleDateString('es-CO') : '',
@@ -448,7 +468,6 @@ exports.exportClientsToExcel = async (req, res) => {
             'Teléfono': cliente.Telefono || '',
             'Ubicación': cliente.Ubicacion || '',
             'Sector': cliente.sector ? cliente.sector.nombre : 'Sin sector',
-            'Cédula': cliente.Cedula || '',
             'Estado': cliente.estado ? cliente.estado.Estado : 'Sin estado'
         }));
 
@@ -461,6 +480,8 @@ exports.exportClientsToExcel = async (req, res) => {
             { wch: 5 },   // ID
             { wch: 15 },  // Nombre
             { wch: 15 },  // Apellido
+            { wch: 25 },  // Nombre Completo
+            { wch: 15 },  // Cédula
             { wch: 20 },  // Plan MB
             { wch: 15 },  // Fecha Instalación
             { wch: 20 },  // Tipo de Servicio
@@ -469,7 +490,6 @@ exports.exportClientsToExcel = async (req, res) => {
             { wch: 15 },  // Teléfono
             { wch: 30 },  // Ubicación
             { wch: 15 },  // Sector
-            { wch: 15 },  // Cédula
             { wch: 12 }   // Estado
         ];
         worksheet['!cols'] = columnWidths;
@@ -505,6 +525,7 @@ exports.exportClientsToExcel = async (req, res) => {
     }
 };
 
+// ✅ Exportar morosos a Excel (CORREGIDO)
 exports.exportMorososToExcel = async (req, res) => {
     try {
       const mesesMin = parseInt(req.query.meses || 3);
@@ -552,11 +573,14 @@ exports.exportMorososToExcel = async (req, res) => {
   
         if (mesesDeuda.length >= mesesMin) {
           resultados.push({
-            ID: cliente.ID,
-            Nombre: cliente.NombreCliente,
-            Teléfono: cliente.Telefono,
-            Ubicación: cliente.Ubicacion,
-            Sector: cliente.sector?.nombre || 'Sin sector',
+            'ID': cliente.ID,
+            'Nombre': cliente.NombreCliente || '',  // ✅ CORREGIDO
+            'Apellido': cliente.ApellidoCliente || '',  // ✅ CORREGIDO
+            'Nombre Completo': `${cliente.NombreCliente || ''} ${cliente.ApellidoCliente || ''}`.trim(),
+            'Cédula': cliente.Cedula || '',
+            'Teléfono': cliente.Telefono || '',
+            'Ubicación': cliente.Ubicacion || '',
+            'Sector': cliente.sector?.nombre || 'Sin sector',
             'Fecha de Instalación': new Date(cliente.FechaInstalacion).toISOString().split('T')[0],
             'Meses Deuda': mesesDeuda.length,
             'Monto Deuda': Number(mesesDeuda.length * cliente.tarifa.valor),
@@ -568,18 +592,38 @@ exports.exportMorososToExcel = async (req, res) => {
       // Crear Excel con xlsx
       const workbook = XLSX.utils.book_new();
       const worksheet = XLSX.utils.json_to_sheet(resultados);
+      
+      // Ajustar anchos de columnas
+      worksheet['!cols'] = [
+        { wch: 5 },   // ID
+        { wch: 15 },  // Nombre
+        { wch: 15 },  // Apellido
+        { wch: 25 },  // Nombre Completo
+        { wch: 15 },  // Cédula
+        { wch: 15 },  // Teléfono
+        { wch: 30 },  // Ubicación
+        { wch: 15 },  // Sector
+        { wch: 15 },  // Fecha Instalación
+        { wch: 12 },  // Meses Deuda
+        { wch: 15 },  // Monto Deuda
+        { wch: 20 }   // Tipo Servicio
+      ];
+      
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Morosos');
   
       const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-  
-      res.setHeader('Content-Disposition', 'attachment; filename="morosos_vozipcompany.xlsx"');
+      
+      const fechaActual = new Date().toISOString().split('T')[0];
+      const nombreArchivo = `morosos_vozipcompany_${fechaActual}.xlsx`;
+
+      res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.send(buffer);
+      
+      console.log(`✅ Archivo Excel de morosos generado: ${nombreArchivo} (${resultados.length} clientes)`);
     } catch (error) {
       console.error('❌ Error al exportar morosos a Excel:', error.message);
       console.error(error.stack);
       res.status(500).json({ message: 'Error al generar archivo Excel', error: error.message });
     }
-  };
-
-  
+};
