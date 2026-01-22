@@ -27,7 +27,7 @@ const app = express();
 
 // ✅ Configurar CORS para permitir solicitudes desde el frontend Angular
 app.use(cors({
-  origin: 'http://localhost:4200',
+  origin: ['http://localhost:4200', 'https://ictlatam.com'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
