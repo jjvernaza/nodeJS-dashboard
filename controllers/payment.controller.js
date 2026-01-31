@@ -98,7 +98,7 @@ exports.getMetodosPago = async (req, res) => {
     } 
 };     
 
-// ✅ Obtener pagos de un cliente con información histórica (CORREGIDO)
+// ✅ Obtener pagos de un cliente con información histórica
 exports.getPagosCliente = async (req, res) => {     
     try {         
         const { clienteID } = req.params;         
@@ -139,7 +139,7 @@ exports.getPagosCliente = async (req, res) => {
     } 
 };
 
-// ✅ Obtener todos los pagos con información histórica (CORREGIDO)
+// ✅ Obtener todos los pagos con información histórica
 exports.getAllPagos = async (req, res) => {
     try {
         const pagos = await Pago.findAll({
@@ -147,7 +147,7 @@ exports.getAllPagos = async (req, res) => {
                 {
                     model: Cliente,
                     as: 'cliente',
-                    attributes: ['ID', 'NombreCliente', 'ApellidoCliente', 'Cedula']  // ✅ CORREGIDO
+                    attributes: ['ID', 'NombreCliente', 'ApellidoCliente', 'Cedula']
                 },
                 {
                     model: MetodoDePago,
@@ -293,7 +293,143 @@ exports.getMonthlyIncome = async (req, res) => {
     }
 };
 
-// ✅ Generar reporte de clientes con pagos anuales en Excel (CORREGIDO)
+// ✅ NUEVA FUNCIÓN: Calcular ingresos esperados por mes
+/**
+ * Calcula los ingresos esperados mes a mes para un año específico
+ * 
+ * LÓGICA:
+ * - Para cada mes del año, contamos SOLO los clientes que:
+ *   1. Se instalaron ANTES del primer día de ese mes
+ *   2. Están en estado Activo o Convenio (EstadoID 1 o 4)
+ * - Sumamos las tarifas de esos clientes para obtener el ingreso esperado del mes
+ * 
+ * EJEMPLO:
+ * - Cliente instalado el 15 de Enero 2024
+ * - En Enero 2024: NO se cuenta (aún no debe pagar)
+ * - En Febrero 2024: SÍ se cuenta (ya debe pagar febrero)
+ * - En Marzo 2024: SÍ se cuenta (ya debe pagar marzo)
+ */
+exports.getIngresosEsperadosPorMes = async (req, res) => {
+    try {
+        const anio = parseInt(req.query.anio) || new Date().getFullYear();
+        
+        console.log(`\n📊 ===== CÁLCULO DE INGRESOS ESPERADOS ${anio} =====`);
+        
+        const mesesNombres = [
+            'ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO',
+            'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'
+        ];
+        
+        const resultados = [];
+        
+        // Obtener todos los clientes una sola vez
+        const todosLosClientes = await Cliente.findAll({
+            attributes: ['ID', 'FechaInstalacion', 'EstadoID', 'tarifa_id'],
+            include: [
+                {
+                    model: Tarifa,
+                    as: 'tarifa',
+                    attributes: ['id', 'valor']
+                },
+                {
+                    model: Estado,
+                    as: 'estado',
+                    attributes: ['ID', 'Estado']
+                }
+            ]
+        });
+        
+        console.log(`📋 Total de clientes en la base de datos: ${todosLosClientes.length}`);
+        
+        // Procesar cada mes del año
+        for (let mesIndex = 0; mesIndex < 12; mesIndex++) {
+            const nombreMes = mesesNombres[mesIndex];
+            const numeroMes = mesIndex + 1; // 1-12
+            
+            // Fecha del primer día del mes actual
+            const primerDiaDelMes = new Date(anio, mesIndex, 1);
+            
+            console.log(`\n📅 Procesando ${nombreMes} ${anio} (Mes ${numeroMes})`);
+            console.log(`   Primer día del mes: ${primerDiaDelMes.toISOString().split('T')[0]}`);
+            
+            let totalEsperado = 0;
+            let cantidadClientes = 0;
+            const clientesDetalle = [];
+            
+            // Filtrar clientes que deben pagar este mes
+            for (const cliente of todosLosClientes) {
+                // Verificar que el cliente tenga fecha de instalación
+                if (!cliente.FechaInstalacion) {
+                    continue;
+                }
+                
+                const fechaInstalacion = new Date(cliente.FechaInstalacion);
+                
+                // ✅ REGLA CRÍTICA: El cliente debe estar instalado ANTES del primer día del mes
+                // Ejemplo: Para cobrar Febrero, el cliente debe estar instalado antes del 1 de Febrero
+                const estabaInstaladoAntesDelMes = fechaInstalacion < primerDiaDelMes;
+                
+                if (!estabaInstaladoAntesDelMes) {
+                    continue;
+                }
+                
+                // Verificar que el cliente esté activo (Activo=1 o Convenio=4)
+                const estaActivo = cliente.EstadoID === 1 || cliente.EstadoID === 4;
+                
+                if (!estaActivo) {
+                    continue;
+                }
+                
+                // Verificar que tenga tarifa
+                if (!cliente.tarifa || !cliente.tarifa.valor) {
+                    console.log(`   ⚠️ Cliente ${cliente.ID} sin tarifa, omitido`);
+                    continue;
+                }
+                
+                // ✅ Este cliente SÍ debe pagar este mes
+                const tarifaCliente = parseFloat(cliente.tarifa.valor);
+                totalEsperado += tarifaCliente;
+                cantidadClientes++;
+                
+                clientesDetalle.push({
+                    id: cliente.ID,
+                    fechaInstalacion: fechaInstalacion.toISOString().split('T')[0],
+                    estado: cliente.estado?.Estado || 'N/A',
+                    tarifa: tarifaCliente
+                });
+            }
+            
+            console.log(`   ✅ Clientes que deben pagar: ${cantidadClientes}`);
+            console.log(`   💰 Ingreso esperado: $${totalEsperado.toLocaleString('es-CO')}`);
+            
+            // Agregar resultado del mes
+            resultados.push({
+                mes: nombreMes,
+                numeroMes: numeroMes,
+                anio: anio,
+                totalEsperado: totalEsperado,
+                cantidadClientes: cantidadClientes,
+                // Incluir detalle solo en desarrollo para debugging
+                ...(process.env.NODE_ENV === 'development' && clientesDetalle.length <= 10 ? { clientesDetalle } : {})
+            });
+        }
+        
+        console.log(`\n✅ ===== FIN DEL CÁLCULO =====`);
+        console.log(`📈 Meses procesados: ${resultados.length}`);
+        console.log(`💵 Total anual esperado: $${resultados.reduce((sum, m) => sum + m.totalEsperado, 0).toLocaleString('es-CO')}\n`);
+        
+        res.json(resultados);
+        
+    } catch (error) {
+        console.error('❌ Error al calcular ingresos esperados:', error);
+        res.status(500).json({ 
+            message: 'Error al calcular ingresos esperados',
+            error: error.message 
+        });
+    }
+};
+
+// ✅ Generar reporte de clientes con pagos anuales en Excel
 exports.generarReporteClientesPagos = async (req, res) => {
     try {
         const { ano } = req.query;
@@ -325,7 +461,7 @@ exports.generarReporteClientesPagos = async (req, res) => {
                     attributes: ['ID', 'Estado']
                 }
             ],
-            order: [['NombreCliente', 'ASC'], ['ApellidoCliente', 'ASC']]  // ✅ CORREGIDO
+            order: [['NombreCliente', 'ASC'], ['ApellidoCliente', 'ASC']]
         });
         
         console.log(`👥 Clientes encontrados: ${clientes.length}`);
@@ -364,7 +500,7 @@ exports.generarReporteClientesPagos = async (req, res) => {
         // Encabezados
         const encabezados = [
             'Nombre',
-            'Apellido',  // ✅ CORREGIDO
+            'Apellido',
             'CC',
             'Plan MB',
             'Tarifa',
@@ -380,14 +516,14 @@ exports.generarReporteClientesPagos = async (req, res) => {
         // Procesar cada cliente
         for (const cliente of clientes) {
             const fila = [
-                cliente.NombreCliente || '',  // ✅ CORREGIDO
-                cliente.ApellidoCliente || '',  // ✅ CORREGIDO
+                cliente.NombreCliente || '',
+                cliente.ApellidoCliente || '',
                 cliente.Cedula || '',
                 cliente.plan?.nombre || 'Sin plan',
                 cliente.tarifa ? `$${parseFloat(cliente.tarifa.valor).toLocaleString('es-CO')}` : 'Sin tarifa',
                 cliente.Telefono || '',
                 cliente.Ubicacion || '',
-                cliente.sector?.nombre || 'Sin sector',  // ✅ AGREGADO
+                cliente.sector?.nombre || 'Sin sector',
                 cliente.estado?.Estado || 'Sin estado'
             ];
             
@@ -431,12 +567,12 @@ exports.generarReporteClientesPagos = async (req, res) => {
             { wch: 30 }, // Ubicación
             { wch: 15 }, // Sector
             { wch: 12 }, // Estado
-            ...meses.map(() => ({ wch: 20 })) // Meses (más ancho para info adicional)
+            ...meses.map(() => ({ wch: 20 })) // Meses
         ];
         
         worksheet['!cols'] = columnWidths;
         
-        // Estilo para encabezados (opcional pero recomendado)
+        // Estilo para encabezados
         const range = XLSX.utils.decode_range(worksheet['!ref']);
         for (let C = range.s.c; C <= range.e.c; ++C) {
             const address = XLSX.utils.encode_col(C) + "1";

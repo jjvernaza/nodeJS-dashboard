@@ -51,18 +51,33 @@ router.get('/metodos-pago',
 
 /**
  * GET /api/pagos/ingresos-mensuales
- * Obtener ingresos mensuales del sistema
+ * Obtener ingresos mensuales REALES del sistema
  * Requiere permiso: pagos.ver_ingresos
  * Registra la consulta en bitácora
  */
 router.get('/ingresos-mensuales', 
     checkPermission(['pagos.ver_ingresos']),
     auditMiddleware('PAGOS', (req) => {
-        const mes = req.query.mes || 'actual';
-        const año = req.query.año || new Date().getFullYear();
-        return `Consulta de ingresos mensuales (${mes}/${año})`;
+        const anio = req.query.anio || new Date().getFullYear();
+        return `Consulta de ingresos mensuales reales (${anio})`;
     }),
     paymentController.getMonthlyIncome
+);
+
+/**
+ * GET /api/pagos/ingresos-esperados
+ * Obtener ingresos esperados mes a mes
+ * Calcula los ingresos esperados basándose en clientes instalados antes de cada mes
+ * Requiere permiso: pagos.ver_ingresos
+ * Registra la consulta en bitácora
+ */
+router.get('/ingresos-esperados', 
+    checkPermission(['pagos.ver_ingresos']),
+    auditMiddleware('PAGOS', (req) => {
+        const anio = req.query.anio || new Date().getFullYear();
+        return `Consulta de ingresos esperados (${anio})`;
+    }),
+    paymentController.getIngresosEsperadosPorMes
 );
 
 /**
@@ -75,7 +90,8 @@ router.get('/reporte-clientes-pagos',
     checkPermission(['pagos.generar_reportes']),
     auditMiddleware('PAGOS', (req) => {
         const fecha = new Date().toLocaleDateString();
-        return `Generación de reporte clientes-pagos (${fecha})`;
+        const anio = req.query.ano || new Date().getFullYear();
+        return `Generación de reporte clientes-pagos ${anio} (${fecha})`;
     }),
     paymentController.generarReporteClientesPagos
 );
@@ -95,8 +111,9 @@ router.post('/add',
     auditMiddleware('PAGOS', (req, data) => {
         const monto = req.body.Monto || 0;
         const clienteID = req.body.ClienteID || 'Desconocido';
-        const metodoPago = req.body.MetodoPagoID || '';
-        return `Pago registrado: $${monto} - Cliente ID: ${clienteID} (Método: ${metodoPago})`;
+        const mes = req.body.Mes || '';
+        const ano = req.body.Ano || '';
+        return `Pago registrado: $${monto} - Cliente ID: ${clienteID} (${mes} ${ano})`;
     }),
     paymentController.addPayment
 );
@@ -112,7 +129,9 @@ router.put('/update/:id',
     auditMiddleware('PAGOS', (req, data) => {
         const pagoId = req.params.id;
         const monto = req.body.Monto || '';
-        return `Pago actualizado ID: ${pagoId} - Monto: $${monto}`.trim();
+        const mes = req.body.Mes || '';
+        const ano = req.body.Ano || '';
+        return `Pago actualizado ID: ${pagoId} - Monto: $${monto} (${mes} ${ano})`.trim();
     }),
     paymentController.updatePayment
 );
