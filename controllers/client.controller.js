@@ -627,3 +627,107 @@ exports.exportMorososToExcel = async (req, res) => {
       res.status(500).json({ message: 'Error al generar archivo Excel', error: error.message });
     }
 };
+
+// ✅ LOGIN PORTAL CLIENTE — público, sin JWT
+exports.loginCliente = async (req, res) => {
+  try {
+    const { cedula } = req.body;
+
+    if (!cedula || cedula.trim() === '') {
+      return res.status(400).json({ message: 'La cédula es requerida' });
+    }
+
+    const cliente = await Cliente.findOne({
+      where: { Cedula: cedula.trim() },
+      include: [
+        { model: Estado,       as: 'estado',       attributes: ['ID', 'Estado', 'Color'] },
+        { model: TipoServicio, as: 'tipoServicio',  attributes: ['ID', 'Tipo'] },
+        { model: Plan,         as: 'plan',          attributes: ['id', 'nombre', 'velocidad'] },
+        { model: Sector,       as: 'sector',        attributes: ['id', 'nombre'] },
+        { model: Tarifa,       as: 'tarifa',        attributes: ['id', 'valor'] }
+      ]
+    });
+
+    if (!cliente) {
+      return res.status(404).json({ message: 'No se encontró ningún cliente con esa cédula' });
+    }
+
+    // Últimos 3 pagos
+    const MetodoDePago = require('../models/metodo_pago.model');
+    const ultimosPagos = await Pago.findAll({
+      where: { ClienteID: cliente.ID },
+      order: [['FechaPago', 'DESC'], ['ID', 'DESC']],
+      limit: 3,
+      include: [{ model: MetodoDePago, as: 'metodoPago', attributes: ['ID', 'Metodo'] }]
+    });
+
+    // Calcular meses de deuda
+    const hoy = new Date();
+    let mesesDeuda = 0;
+    let proximoPago = null;
+
+    if (cliente.tarifa && cliente.tarifa.valor > 0) {
+      const todosPagos = await Pago.findAll({
+        where: { ClienteID: cliente.ID },
+        order: [['Ano', 'DESC'], ['Mes', 'DESC']]
+      });
+
+      const diaCorte = new Date(cliente.FechaInstalacion).getDate();
+      let fechaBase;
+
+      if (todosPagos.length > 0) {
+        const ultimo  = todosPagos[0];
+        const numMes  = mesesMap[ultimo.Mes.toUpperCase().trim()];
+        const dia     = Math.min(diaCorte, new Date(ultimo.Ano, numMes, 0).getDate());
+        fechaBase     = new Date(ultimo.Ano, numMes - 1, dia);
+      } else {
+        fechaBase = new Date(cliente.FechaInstalacion);
+        if (fechaBase < new Date(2024, 0, 1)) {
+          fechaBase = new Date(2024, 0, diaCorte);
+        }
+      }
+
+      // Próxima fecha de pago
+      const proxFecha = new Date(fechaBase);
+      proxFecha.setMonth(proxFecha.getMonth() + 1);
+      proximoPago = proxFecha.toISOString().split('T')[0];
+
+      // Contar meses sin pagar
+      const todosPagosSet = await Pago.findAll({ where: { ClienteID: cliente.ID } });
+      const mesesPagados  = new Set(
+        todosPagosSet.map(p => [p.Ano, mesesMap[p.Mes.toUpperCase().trim()]].toString())
+      );
+      const mesesTotales  = obtenerMesesVencidosDesde(fechaBase, hoy, diaCorte);
+      mesesDeuda = mesesTotales.filter(
+        ([y, m]) => !mesesPagados.has([y, m].toString())
+      ).length;
+    }
+
+    res.json({
+      cliente: {
+        ID:             cliente.ID,
+        NombreCompleto: `${cliente.NombreCliente} ${cliente.ApellidoCliente}`.trim(),
+        NombreCliente:  cliente.NombreCliente,
+        ApellidoCliente:cliente.ApellidoCliente,
+        Cedula:         cliente.Cedula,
+        Telefono:       cliente.Telefono,
+        Ubicacion:      cliente.Ubicacion,
+        FechaInstalacion: cliente.FechaInstalacion,
+        IPAddress:      cliente.IPAddress,
+        estado:         cliente.estado,
+        tipoServicio:   cliente.tipoServicio,
+        plan:           cliente.plan,
+        sector:         cliente.sector,
+        tarifa:         cliente.tarifa
+      },
+      ultimosPagos,
+      mesesDeuda,
+      montoDeuda:  mesesDeuda * (parseFloat(cliente.tarifa?.valor) || 0),
+      proximoPago
+    });
+
+  } catch (error) {
+    console.error('❌ Error en loginCliente:', error);
+    res.status(500).json({ message: 'Error interno del servidor', error: error.message });
+  }
+};

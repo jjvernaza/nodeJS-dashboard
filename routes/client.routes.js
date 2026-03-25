@@ -6,42 +6,34 @@ const { checkPermission } = require('../middlewares/permission.middleware');
 const { auditMiddleware } = require('../middlewares/auditoria.middleware');
 
 // ============================================
-// MIDDLEWARE DE AUTENTICACIÓN
-// ============================================
-// ⚠️ Todas las rutas de clientes requieren autenticación
-router.use(authMiddleware);
-
-// ============================================
-// CONSULTA DE CLIENTES
+// RUTAS PÚBLICAS — sin authMiddleware
 // ============================================
 
 /**
- * GET /api/clientes/all
- * Obtener todos los clientes del sistema
- * Requiere permiso: clientes.leer
+ * POST /api/clientes/login-cliente
+ * Login del portal de clientes con cédula
+ * SIN autenticación JWT — ruta pública
  */
-router.get('/all', 
+router.post('/login-cliente', clientController.loginCliente);
+
+// ============================================
+// RUTAS PRIVADAS — requieren authMiddleware
+// ============================================
+
+router.get('/all',
+    authMiddleware,
     checkPermission(['clientes.leer']),
     clientController.getAllClients
 );
 
-/**
- * GET /api/clientes/search
- * Buscar cliente por nombre, apellido, cédula, etc.
- * Requiere permiso: clientes.leer o clientes.buscar_avanzado
- */
-router.get('/search', 
+router.get('/search',
+    authMiddleware,
     checkPermission(['clientes.leer', 'clientes.buscar_avanzado']),
     clientController.searchClient
 );
 
-/**
- * GET /api/clientes/morosos
- * Obtener clientes con pagos pendientes/atrasados
- * Requiere permiso: morosos.ver
- * Registra la consulta en bitácora
- */
-router.get('/morosos', 
+router.get('/morosos',
+    authMiddleware,
     checkPermission(['morosos.ver']),
     auditMiddleware('MOROSOS', (req) => {
         const meses = req.query.meses || 'todos';
@@ -50,84 +42,48 @@ router.get('/morosos',
     clientController.obtenerMorosos
 );
 
-// ============================================
-// CRUD DE CLIENTES
-// ============================================
-
-/**
- * POST /api/clientes/create
- * Crear un nuevo cliente
- * Requiere permiso: clientes.crear
- * Registra la acción en bitácora
- */
-router.post('/create', 
+router.post('/create',
+    authMiddleware,
     checkPermission(['clientes.crear']),
-    auditMiddleware('CLIENTES', (req, data) => {
-        const nombre = req.body.NombreCliente || 'Desconocido';
+    auditMiddleware('CLIENTES', (req) => {
+        const nombre   = req.body.NombreCliente  || 'Desconocido';
         const apellido = req.body.ApellidoCliente || '';
-        const cedula = req.body.Cedula || '';
+        const cedula   = req.body.Cedula          || '';
         return `Cliente creado: ${nombre} ${apellido} (CC: ${cedula})`.trim();
     }),
     clientController.addCliente
 );
 
-/**
- * PUT /api/clientes/update/:id
- * Actualizar información de un cliente existente
- * Requiere permiso: clientes.actualizar
- * Registra la acción en bitácora
- */
-router.put('/update/:id', 
+router.put('/update/:id',
+    authMiddleware,
     checkPermission(['clientes.actualizar']),
-    auditMiddleware('CLIENTES', (req, data) => {
+    auditMiddleware('CLIENTES', (req) => {
         const clienteId = req.params.id;
-        const nombre = req.body.NombreCliente || '';
-        const apellido = req.body.ApellidoCliente || '';
+        const nombre    = req.body.NombreCliente   || '';
+        const apellido  = req.body.ApellidoCliente || '';
         return `Cliente actualizado ID: ${clienteId} - ${nombre} ${apellido}`.trim();
     }),
     clientController.updateClient
 );
 
-/**
- * DELETE /api/clientes/delete/:id
- * Eliminar un cliente del sistema
- * Requiere permiso: clientes.eliminar
- * Registra la acción en bitácora
- */
-router.delete('/delete/:id', 
+router.delete('/delete/:id',
+    authMiddleware,
     checkPermission(['clientes.eliminar']),
-    auditMiddleware('CLIENTES', (req, data) => {
-        const clienteId = req.params.id;
-        return `Cliente eliminado ID: ${clienteId}`;
+    auditMiddleware('CLIENTES', (req) => {
+        return `Cliente eliminado ID: ${req.params.id}`;
     }),
     clientController.deleteClient
 );
 
-// ============================================
-// EXPORTACIÓN DE DATOS
-// ============================================
-
-/**
- * GET /api/clientes/export/excel
- * Exportar todos los clientes a archivo Excel
- * Requiere permiso: clientes.exportar
- * Registra la acción en bitácora
- */
-router.get('/export/excel', 
+router.get('/export/excel',
+    authMiddleware,
     checkPermission(['clientes.exportar']),
-    auditMiddleware('CLIENTES', () => {
-        return 'Exportación de todos los clientes a Excel';
-    }),
+    auditMiddleware('CLIENTES', () => 'Exportación de todos los clientes a Excel'),
     clientController.exportClientsToExcel
 );
 
-/**
- * GET /api/clientes/morosos/excel
- * Exportar clientes morosos a archivo Excel
- * Requiere permiso: morosos.exportar
- * Registra la acción en bitácora
- */
-router.get('/morosos/excel', 
+router.get('/morosos/excel',
+    authMiddleware,
     checkPermission(['morosos.exportar']),
     auditMiddleware('MOROSOS', (req) => {
         const meses = req.query.meses || 'todos';
